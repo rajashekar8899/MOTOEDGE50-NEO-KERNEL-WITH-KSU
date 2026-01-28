@@ -70,5 +70,6 @@ if ! git diff --exit-code README.md; then
 fi
 
 # 8. Create Release
+BUILD_NO=$(echo "$FW_DIR" | sed 's/firmware_//')
 TAG="build-$K_VER-$(date +%Y%m%d%H%M)"
-gh release create "$TAG" patched_boot.img --title "Release $K_VER ($TAG)" --notes "Patched with WildKSU ($W_APP)" --latest
+gh release create "$TAG" patched_boot.img --title "Update: $BUILD_NO ($K_VER)" --notes "Patched with WildKSU ($W_APP). Matching Stock Build: $BUILD_NO" --latest
