@@ -1,26 +1,30 @@
 name: Patch Kernel with WildKSU
 
 on:
+  schedule:
+    - cron: '0 0 * * 0' # Every Sunday at midnight
   push:
     branches: [ master ]
   workflow_dispatch:
     inputs:
       firmware_dir:
-        description: 'Directory containing stock ROM files (e.g., firmware_V1UIS35H)'
+        description: 'Directory containing stock ROM files'
         required: true
         default: 'firmware_V1UIS35H'
       kernel_version:
-        description: 'Kernel version to use from WildKernels (e.g., 6.1.141)'
-        required: true
+        description: 'Kernel version (leave empty to fetch latest 6.1.x)'
+        required: false
         default: '6.1.141'
       release_tag:
-        description: 'WildKernels release tag'
-        required: true
-        default: 'v2.0.0-r8'
+        description: 'WildKernels release tag (leave empty for latest)'
+        required: false
+        default: 'latest'
 
 jobs:
   patch:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -32,14 +36,34 @@ jobs:
           wget https://github.com/magojohnji/magiskboot-linux/raw/main/x86_64/magiskboot -O magiskboot
           chmod +x magiskboot
 
+      - name: Resolve WildKSU Latest Release
+        id: resolve_version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          R_TAG="${{ github.event.inputs.release_tag || 'latest' }}"
+          if [ "$R_TAG" = "latest" ]; then
+            R_TAG=$(gh release list --repo WildKernels/GKI_KernelSU_SUSFS --limit 1 | awk '{print $3}')
+          fi
+          echo "tag=$R_TAG" >> $GITHUB_OUTPUT
+          echo "Resolved Tag: $R_TAG"
+
       - name: Download WildKSU Kernel
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Use default inputs for push trigger or inputs for manual trigger
           K_VER="${{ github.event.inputs.kernel_version || '6.1.141' }}"
-          R_TAG="${{ github.event.inputs.release_tag || 'v2.0.0-r8' }}"
-          ASSET_NAME="${K_VER}-android14-2025-07-Normal-AnyKernel3.zip"
+          R_TAG="${{ steps.resolve_version.outputs.tag }}"
+          
+          # Match 6.1.141 specifically or search for best match
+          ASSET_NAME=$(gh release view "$R_TAG" --repo WildKernels/GKI_KernelSU_SUSFS --json assets --jq ".assets[] | select(.name | contains(\"$K_VER\") and contains(\"Normal\")) | .name" | head -n 1)
+          
+          if [ -z "$ASSET_NAME" ]; then
+            echo "Error: Could not find asset matching $K_VER with 'Normal' variant in $R_TAG"
+            exit 1
+          fi
+          
+          echo "Downloading asset: $ASSET_NAME"
           gh release download "$R_TAG" --repo WildKernels/GKI_KernelSU_SUSFS --pattern "$ASSET_NAME"
           unzip "$ASSET_NAME" Image
           if [ ! -f Image ]; then
@@ -56,15 +80,12 @@ jobs:
             exit 1
           fi
           
-          # Unpack stock boot.img to get stock kernel
           ./magiskboot unpack "$BOOT_IMG"
           mv kernel kernel.stock
           
-          # Extract stock version string
           export STOCK_VERSION=$(strings kernel.stock | grep "Linux version " | head -n 1)
           echo "Stock Kernel Version: $STOCK_VERSION"
           
-          # Extract WildKSU version string
           export WILD_VERSION=$(strings Image | grep "Linux version " | head -n 1)
           echo "WildKSU Kernel Version: $WILD_VERSION"
           
@@ -109,8 +130,12 @@ else:
           mv Image kernel
           ./magiskboot repack "$BOOT_IMG" patched_boot.img
           
-      - name: Upload Patched boot.img
-        uses: actions/upload-artifact@v4
-        with:
-          name: patched-boot-${{ github.event.inputs.kernel_version || '6.1.141' }}
-          path: patched_boot.img
+      - name: Create Development Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG_NAME="build-$(date +'%Y.%m.%d-%H%M')"
+          gh release create "$TAG_NAME" patched_boot.img \
+            --title "Automated Build: $TAG_NAME" \
+            --notes "Patched with WildKSU $(strings kernel | grep 'Linux version ' | head -n 1)" \
+            --prerelease
