@@ -83,8 +83,19 @@ if [ -f "$FW_DIR/init_boot.img" ]; then
     if [ -f "ramdisk.cpio" ]; then RD_FILE="ramdisk.cpio"; else RD_FILE="ramdisk"; fi
     
     if [ -f "$RD_FILE" ]; then
-        # Try finding the display ID property
+        # Try finding the display ID property (Standard Android)
         MOTO_ID=$(strings "$RD_FILE" | grep "ro.build.display.id=" | head -n 1 | cut -d'=' -f2)
+        
+        # If standard failed, try Motorola specific property
+        if [ -z "$MOTO_ID" ]; then
+             MOTO_ID=$(strings "$RD_FILE" | grep "ro.mot.build.version.release=" | head -n 1 | cut -d'=' -f2)
+        fi
+        
+        # If that failed, try just finding the pattern string in the whole file
+        if [ -z "$MOTO_ID" ]; then
+             MOTO_ID=$(strings "$RD_FILE" | grep -oE "V1[A-Z0-9]{6}\.[0-9]+-[0-9]+-[0-9]+-[0-9]+" | head -n 1)
+        fi
+        
         rm "$RD_FILE"
     fi
 fi
