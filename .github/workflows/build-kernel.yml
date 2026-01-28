@@ -8,9 +8,11 @@ on:
       firmware_dir:
         description: 'Manual override: Directory containing stock ROM files'
         required: false
+        default: ''
       kernel_version:
         description: 'Manual override: Kernel version (e.g., 6.1.141)'
         required: false
+        default: ''
 
 jobs:
   patch:
@@ -27,8 +29,10 @@ jobs:
       - name: Auto-Detect Firmware Directory
         id: detect_fw
         run: |
-          if [ -n "${{ github.event.inputs.firmware_dir }}" ]; then
-            echo "fw_dir=${{ github.event.inputs.firmware_dir }}" >> $GITHUB_OUTPUT
+          # Use input if provided, else detect
+          INPUT_FW="${{ github.event.inputs.firmware_dir }}"
+          if [ -n "$INPUT_FW" ]; then
+            echo "fw_dir=$INPUT_FW" >> $GITHUB_OUTPUT
           else
             FW_DIR=$(ls -d firmware_* | sort -V | tail -n 1)
             echo "fw_dir=$FW_DIR" >> $GITHUB_OUTPUT
@@ -65,22 +69,30 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          K_VER="${{ github.event.inputs.kernel_version || steps.detect_kver.outputs.kver }}"
+          K_VER_INPUT="${{ github.event.inputs.kernel_version }}"
+          K_VER="${K_VER_INPUT:-${{ steps.detect_kver.outputs.kver }}}"
           R_TAG="${{ steps.resolve_wildksu.outputs.tag }}"
+          
           ASSET_NAME=$(gh release view "$R_TAG" --repo WildKernels/GKI_KernelSU_SUSFS --json assets --jq ".assets[] | select(.name | contains(\"$K_VER\") and contains(\"Normal\")) | .name" | head -n 1)
+          
+          if [ -z "$ASSET_NAME" ]; then
+            echo "Error: Could not find asset for $K_VER"
+            exit 1
+          fi
+          
           gh release download "$R_TAG" --repo WildKernels/GKI_KernelSU_SUSFS --pattern "$ASSET_NAME"
           unzip "$ASSET_NAME" Image
+          
           export STOCK_VERSION=$(strings kernel.stock | grep "Linux version " | head -n 1)
           export WILD_VERSION=$(strings Image | grep "Linux version " | head -n 1)
+          
           python3 -c "
 import sys, os
 with open('Image', 'rb') as f: data = f.read()
-old_str, new_str = os.environ['WILD_VERSION'].encode(), os.environ['STOCK_VERSION'].encode()
-if old_str in data:
-    new_str_padded = new_str + b'\x00' * (len(old_str) - len(new_str))
-    new_data = data.replace(old_str, new_str_padded)
-    with open('Image.patched', 'wb') as f: f.write(new_data)
-else: sys.exit(0)
+o, n = os.environ['WILD_VERSION'].encode(), os.environ['STOCK_VERSION'].encode()
+if o in data:
+    n_padded = n + b'\x00' * (len(o) - len(n))
+    with open('Image.patched', 'wb') as f: f.write(data.replace(o, n_padded))
 "
           if [ -f Image.patched ]; then mv Image.patched kernel; else mv Image kernel; fi
 
@@ -96,14 +108,19 @@ else: sys.exit(0)
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
+          
+          # Fetch versions
           W_APP=$(gh release view --repo WildKernels/Wild_KSU --json tagName --jq .tagName)
           Z_NEXT=$(gh release view --repo Dr-TSNG/ZygiskNext --json tagName --jq .tagName)
-          M_OVERLAY=$(gh release view --repo KernelSU-Modules-Repo/meta-overlayfs --json tagName --jq .tagName)
+          M_OVER=$(gh release view --repo KernelSU-Modules-Repo/meta-overlayfs --json tagName --jq .tagName)
           S_MOD=$(gh release view --repo sidex15/susfs4ksu-module --json tagName --jq .tagName)
-          sed -i "s|releases/tag/latest|releases/tag/$W_APP|g" README.md
-          sed -i "s|releases/tag/latest|releases/tag/$Z_NEXT|g" README.md
-          sed -i "s|releases/tag/latest|releases/tag/$M_OVERLAY|g" README.md
-          sed -i "s|releases/tag/latest|releases/tag/$S_MOD|g" README.md
+          
+          # Use safer sed delimiter and more robust regex
+          sed -i "s|Wild_KSU/releases/tag/[^\)]*|Wild_KSU/releases/tag/$W_APP|g" README.md
+          sed -i "s|ZygiskNext/releases/tag/[^\)]*|ZygiskNext/releases/tag/$Z_NEXT|g" README.md
+          sed -i "s|meta-overlayfs/releases/tag/[^\)]*|meta-overlayfs/releases/tag/$M_OVER|g" README.md
+          sed -i "s|susfs4ksu-module/releases/tag/[^\)]*|susfs4ksu-module/releases/tag/$S_MOD|g" README.md
+          
           if ! git diff --exit-code README.md; then
             git add README.md
             git commit -m "Docs: Auto-update module versions"
@@ -115,5 +132,8 @@ else: sys.exit(0)
           GH_TOKEN: ${{ github.token }}
         run: |
           K_VER="${{ steps.detect_kver.outputs.kver }}"
-          TAG_NAME="release-$K_VER-$(date +'%Y.%m.%d-%H%M')"
-          gh release create "$TAG_NAME" patched_boot.img --title "Moto Edge 50 Neo Patched Boot ($K_VER)" --notes "Patched with WildKSU" --latest
+          TAG_NAME="build-$K_VER-${{ github.run_number }}"
+          gh release create "$TAG_NAME" patched_boot.img \
+            --title "Moto Edge 50 Neo Build ($K_VER)" \
+            --notes "Patched with WildKSU" \
+            --latest
