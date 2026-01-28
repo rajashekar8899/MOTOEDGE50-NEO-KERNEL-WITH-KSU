@@ -26,7 +26,7 @@ fi
 echo "Target Kernel Version: $K_VER"
 
 # 4. Fetch WildKSU
-R_TAG=$(gh release list --repo WildKernels/GKI_KernelSU_SUSFS --limit 1 | awk '{print $3}')
+R_TAG=$(gh release view --repo WildKernels/GKI_KernelSU_SUSFS --json tagName --jq .tagName)
 ASSET=$(gh release view "$R_TAG" --repo WildKernels/GKI_KernelSU_SUSFS --json assets --jq ".assets[] | select(.name | contains(\"$K_VER\") and contains(\"Normal\")) | .name" | head -n 1)
 if [ -z "$ASSET" ]; then echo "Error: No matching WildKSU GKI for $K_VER"; exit 1; fi
 gh release download "$R_TAG" --repo WildKernels/GKI_KernelSU_SUSFS --pattern "$ASSET"
