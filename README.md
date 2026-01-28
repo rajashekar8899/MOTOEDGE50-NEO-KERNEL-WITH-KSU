@@ -31,11 +31,19 @@ This repository automates the process of patching the stock Moto Edge 50 Neo `bo
 
 ### Step 2: Patch init_boot.img
 
-1. Download and install the [WildKSU Manager](https://github.com/WildKernels/Wild_KSU).
+1. Download and install the [WildKSU Manager](https://github.com/WildKernels/Wild_KSU/releases). *It is highly recommended to use the spoofed version to hide the app from aggressive detection.*
 2. Since the ramdisk is located in `init_boot.img` on this device:
    - Use the WildKSU app.
    - Choose "Direct Install" or "Patch File" (using the `init_boot.img` from the `firmware_V1UIS35H` folder).
    - Follow the app's instructions to complete the root process.
+
+## Recommended Modules for Root Hiding
+
+For best results in bypassing integrity checks and hiding root from aggressive apps, install the following modules in order:
+
+1. **[ZygiskNext](https://github.com/Dr-TSNG/ZygiskNext/releases)**: Enables Zygisk for Magisk-style modules.
+2. **[meta-overlayfs](https://github.com/KernelSU-Modules-Repo/meta-overlayfs/releases)**: The official reference mounting method for KernelSU (Recommended). It provides standard overlayfs support, ensuring high compatibility and proper unmounting.
+3. **[SUSFS Module](https://github.com/sidex15/susfs4ksu-module/releases)**: Manages kernel-level SUSFS features.
 
 ## Repository Structure
 
