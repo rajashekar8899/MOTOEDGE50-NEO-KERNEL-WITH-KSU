@@ -71,8 +71,26 @@ fi
 
 # 8. Create Release
 # 8. Create Release
+# 8. Create Release
 BUILD_ID=$(echo "$STOCK_FULL" | sed 's/Linux version //;s/ (.*//')
-FW_VER=$(basename "$FW_DIR" | sed 's/^firmware_//')
+
+# Attempt to extract full Motorola Build ID (e.g., V1UIS35H.11-39-28-5) from kernel rodata or cmdline
+MOTO_ID=$(strings kernel.stock | grep -oE "[A-Z0-9]{8}\.[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]+" | head -n 1)
+
+# Fallback: Check init_boot.img if available
+if [ -z "$MOTO_ID" ] && [ -f "$FW_DIR/init_boot.img" ]; then
+    ./magiskboot unpack "$FW_DIR/init_boot.img"
+    MOTO_ID=$(strings ramdisk | grep -oE "[A-Z0-9]{8}\.[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]+" | head -n 1)
+    rm ramdisk
+fi
+
+# Fallback: Use Folder Name if extraction failed
+if [ -z "$MOTO_ID" ]; then
+    FW_VER=$(basename "$FW_DIR" | sed 's/^firmware_//')
+else
+    FW_VER="$MOTO_ID"
+fi
+
 TAG="$FW_VER"
 
 # Delete existing release/tag if it exists to allow re-runs
