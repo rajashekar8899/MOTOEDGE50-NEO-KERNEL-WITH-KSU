@@ -14,6 +14,10 @@ This repository automates the process of patching the stock Moto Edge 50 Neo `bo
 
 > [!WARNING]
 > Rooting and flashing kernels carry risks. Ensure you have a backup of your data.
+>
+> **CRITICAL**: ONLY flash a `patched_boot.img` that exactly matches your device's **Build Number**. Flashing a kernel from a newer or older version than your current OS will result in a **BOOTLOOP** or **BRICK**.
+>
+> Check your build number in: `Settings > About phone > Build number`.
 
 ### Step 1: Flash Patched boot.img
 
