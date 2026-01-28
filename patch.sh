@@ -79,9 +79,14 @@ BUILD_ID=$(echo "$STOCK_FULL" | sed 's/Linux version //;s/ (.*//')
 MOTO_ID=""
 if [ -f "$FW_DIR/init_boot.img" ]; then
     ./magiskboot unpack "$FW_DIR/init_boot.img"
-    # Try finding the display ID property
-    MOTO_ID=$(strings ramdisk | grep "ro.build.display.id=" | head -n 1 | cut -d'=' -f2)
-    rm ramdisk
+    # magiskboot might output 'ramdisk' or 'ramdisk.cpio'
+    if [ -f "ramdisk.cpio" ]; then RD_FILE="ramdisk.cpio"; else RD_FILE="ramdisk"; fi
+    
+    if [ -f "$RD_FILE" ]; then
+        # Try finding the display ID property
+        MOTO_ID=$(strings "$RD_FILE" | grep "ro.build.display.id=" | head -n 1 | cut -d'=' -f2)
+        rm "$RD_FILE"
+    fi
 fi
 
 # Strategy 2: If finding property failed, try aggressive grep on kernel/ramdisk for the specific pattern
