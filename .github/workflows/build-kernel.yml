@@ -1,12 +1,7 @@
 name: Patch Kernel with WildKSU
 
 on:
-  schedule:
-    - cron: '0 0 * * 0' # Every Sunday at midnight
   push:
-    paths:
-      - 'firmware_*/**' # Trigger when new firmware files are uploaded
-      - '.github/workflows/**'
     branches: [ master ]
   workflow_dispatch:
     inputs:
