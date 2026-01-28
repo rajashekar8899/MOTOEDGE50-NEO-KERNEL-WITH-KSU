@@ -1,0 +1,11 @@
+BUILD INFORMATION
+  SW Version: vienna_g_sys-user 15 V1UIS35H.11-39-28-5 ba053-61078 release-keys MV-111
+  MBM Version: MBM-3.1-vienna-5fc5864-V1UIS35H.11-39-28-5-ba053
+  Modem Version: MT6878V_NR17.RC.MP.V24.2.P117.01.126.85R
+  SW Display Build ID: V1UIS35H.11-39-28-5
+  Build Fingerprint: motorola/vienna_g_sys/vienna:15/V1UIS35H.11-39-28-5/ba053-61078:user/release-keys
+
+OTHER INFORMATION
+  Subsidy Lock Config: slcf_mediatek_default_v1.0.atc
+  Regulatory Info (eLabel): regulatory_info_default.png
+  eLabel SHA1: da39a3ee5e6b4b0d3255bfef95601890afd80709
