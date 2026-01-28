@@ -15,12 +15,13 @@ on:
 jobs:
   patch:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           lfs: true
-          fetch-depth: 0
 
       - name: Tools
         run: |
@@ -31,23 +32,22 @@ jobs:
         id: build
         env:
           GH_TOKEN: ${{ github.token }}
-          FW_IN: ${{ inputs.firmware_dir }}
-          KV_IN: ${{ inputs.kernel_version }}
+          FW_IN: ${{ github.event.inputs.firmware_dir || '' }}
+          KV_IN: ${{ github.event.inputs.kernel_version || '' }}
         run: |
-          # Detect Firmware
-          FW_DIR="$FW_IN"
-          if [ -z "$FW_DIR" ]; then FW_DIR=$(ls -d firmware_* | sort -V | tail -n 1); fi
-          echo "fw_use=$FW_DIR" >> $GITHUB_OUTPUT
+          # FW Detection
+          if [ -n "$FW_IN" ]; then FW_DIR="$FW_IN"; else FW_DIR=$(ls -d firmware_* | sort -V | tail -n 1); fi
+          echo "FW_DIR=$FW_DIR" >> $GITHUB_ENV
           
+          # Unpack and detect
           ./magiskboot unpack "$FW_DIR/boot.img"
           mv kernel kernel.stock
           
-          # Detect/Resolve Version
-          K_VER="$KV_IN"
-          if [ -z "$K_VER" ]; then K_VER=$(strings kernel.stock | grep "Linux version " | awk '{print $3}' | cut -d'-' -f1); fi
-          echo "kver_use=$K_VER" >> $GITHUB_OUTPUT
+          if [ -n "$KV_IN" ]; then K_VER="$KV_IN"; else K_VER=$(strings kernel.stock | grep "Linux version " | awk '{print $3}' | cut -d'-' -f1); fi
+          echo "K_VER=$K_VER" >> $GITHUB_ENV
+          echo "kver=$K_VER" >> $GITHUB_OUTPUT
           
-          # Upstream
+          # Download
           R_TAG=$(gh release list --repo WildKernels/GKI_KernelSU_SUSFS --limit 1 | awk '{print $3}')
           ASSET=$(gh release view "$R_TAG" --repo WildKernels/GKI_KernelSU_SUSFS --json assets --jq ".assets[] | select(.name | contains(\"$K_VER\") and contains(\"Normal\")) | .name" | head -n 1)
           gh release download "$R_TAG" --repo WildKernels/GKI_KernelSU_SUSFS --pattern "$ASSET"
@@ -67,28 +67,9 @@ else:
 "
           ./magiskboot repack "$FW_DIR/boot.img" patched_boot.img
 
-      - name: Docs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          W_APP=$(gh release view --repo WildKernels/Wild_KSU --json tagName --jq .tagName)
-          Z_NX=$(gh release view --repo Dr-TSNG/ZygiskNext --json tagName --jq .tagName)
-          M_OV=$(gh release view --repo KernelSU-Modules-Repo/meta-overlayfs --json tagName --jq .tagName)
-          S_MD=$(gh release view --repo sidex15/susfs4ksu-module --json tagName --jq .tagName)
-          sed -i "s|releases/tag/latest|releases/tag/$W_APP|g" README.md
-          sed -i "s|releases/tag/latest|releases/tag/$Z_NX|g" README.md
-          sed -i "s|releases/tag/latest|releases/tag/$M_OV|g" README.md
-          sed -i "s|releases/tag/latest|releases/tag/$S_MD|g" README.md
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          if ! git diff --exit-code README.md; then
-            git add README.md
-            git commit -m "Docs: Auto-update" && git push origin master
-          fi
-
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          K_VER="${{ steps.build.outputs.kver_use }}"
-          gh release create "build-$K_VER-${{ github.run_number }}" patched_boot.img --title "Release $K_VER" --notes "Patched with WildKSU"
+          K_VER="${{ steps.build.outputs.kver }}"
+          gh release create "build-$K_VER-${{ github.run_number }}" patched_boot.img --title "Release $K_VER" --notes "Patched at $(date)"
