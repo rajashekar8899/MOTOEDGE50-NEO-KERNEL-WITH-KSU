@@ -70,6 +70,7 @@ if ! git diff --exit-code README.md; then
 fi
 
 # 8. Create Release
-BUILD_NO=$(echo "$FW_DIR" | sed 's/firmware_//')
+# Extract a clean identifier from the kernel string (e.g., 6.1.141-android14-11-gXXXX)
+BUILD_ID=$(echo "$STOCK_FULL" | sed 's/Linux version //;s/ (.*//')
 TAG="build-$K_VER-$(date +%Y%m%d%H%M)"
-gh release create "$TAG" patched_boot.img --title "Update: $BUILD_NO ($K_VER)" --notes "Patched with WildKSU ($W_APP). Matching Stock Build: $BUILD_NO" --latest
+gh release create "$TAG" patched_boot.img --title "Update: $BUILD_ID" --notes "Patched with WildKSU ($W_APP). Matching Stock Kernel: $BUILD_ID" --latest
