@@ -74,17 +74,22 @@ fi
 # 8. Create Release
 BUILD_ID=$(echo "$STOCK_FULL" | sed 's/Linux version //;s/ (.*//')
 
-# Attempt to extract full Motorola Build ID (e.g., V1UIS35H.11-39-28-5) from kernel rodata or cmdline
-MOTO_ID=$(strings kernel.stock | grep -oE "[A-Z0-9]{8}\.[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]+" | head -n 1)
-
-# Fallback: Check init_boot.img if available
-if [ -z "$MOTO_ID" ] && [ -f "$FW_DIR/init_boot.img" ]; then
+# Attempt to extract full Motorola Build ID (e.g., V1UIS35H.11-39-28-5)
+# Strategy 1: Look for ro.build.display.id in ramdisk strings
+MOTO_ID=""
+if [ -f "$FW_DIR/init_boot.img" ]; then
     ./magiskboot unpack "$FW_DIR/init_boot.img"
-    MOTO_ID=$(strings ramdisk | grep -oE "[A-Z0-9]{8}\.[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]+" | head -n 1)
+    # Try finding the display ID property
+    MOTO_ID=$(strings ramdisk | grep "ro.build.display.id=" | head -n 1 | cut -d'=' -f2)
     rm ramdisk
 fi
 
-# Fallback: Use Folder Name if extraction failed
+# Strategy 2: If finding property failed, try aggressive grep on kernel/ramdisk for the specific pattern
+if [ -z "$MOTO_ID" ]; then
+    MOTO_ID=$(strings kernel.stock | grep -oE "V1[A-Z0-9]{6}\.[0-9]+-[0-9]+-[0-9]+-[0-9]+" | head -n 1)
+fi
+
+# Strategy 3: Fallback to folder name
 if [ -z "$MOTO_ID" ]; then
     FW_VER=$(basename "$FW_DIR" | sed 's/^firmware_//')
 else
