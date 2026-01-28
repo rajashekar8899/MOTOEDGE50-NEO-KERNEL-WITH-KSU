@@ -6,17 +6,15 @@ on:
   workflow_dispatch:
     inputs:
       firmware_dir:
-        description: 'Firmware directory'
+        description: 'Firmware Folder'
         default: ''
       kernel_version:
-        description: 'Kernel version'
+        description: 'Kernel Version'
         default: ''
 
 jobs:
   patch:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,52 +31,43 @@ jobs:
         id: build
         env:
           GH_TOKEN: ${{ github.token }}
-          FW_IN: ${{ github.event.inputs.firmware_dir }}
-          KV_IN: ${{ github.event.inputs.kernel_version }}
+          FW_IN: ${{ inputs.firmware_dir }}
+          KV_IN: ${{ inputs.kernel_version }}
         run: |
           # Detect Firmware
           FW_DIR="$FW_IN"
           if [ -z "$FW_DIR" ]; then FW_DIR=$(ls -d firmware_* | sort -V | tail -n 1); fi
-          echo "Using firmware: $FW_DIR"
+          echo "fw_use=$FW_DIR" >> $GITHUB_OUTPUT
           
-          # Unpack
           ./magiskboot unpack "$FW_DIR/boot.img"
           mv kernel kernel.stock
           
-          # Detect Version
+          # Detect/Resolve Version
           K_VER="$KV_IN"
           if [ -z "$K_VER" ]; then K_VER=$(strings kernel.stock | grep "Linux version " | awk '{print $3}' | cut -d'-' -f1); fi
-          echo "Using kver: $K_VER"
-          echo "kver=$K_VER" >> $GITHUB_OUTPUT
+          echo "kver_use=$K_VER" >> $GITHUB_OUTPUT
           
-          # Download WildKSU
+          # Upstream
           R_TAG=$(gh release list --repo WildKernels/GKI_KernelSU_SUSFS --limit 1 | awk '{print $3}')
           ASSET=$(gh release view "$R_TAG" --repo WildKernels/GKI_KernelSU_SUSFS --json assets --jq ".assets[] | select(.name | contains(\"$K_VER\") and contains(\"Normal\")) | .name" | head -n 1)
-          if [ -z "$ASSET" ]; then echo "No GKI for $K_VER"; exit 1; fi
           gh release download "$R_TAG" --repo WildKernels/GKI_KernelSU_SUSFS --pattern "$ASSET"
           unzip "$ASSET" Image
           
-          # Patch Strings
+          # Patch
           export S_FULL=$(strings kernel.stock | grep "Linux version " | head -n 1)
           export W_FULL=$(strings Image | grep "Linux version " | head -n 1)
           python3 -c "
 import os, sys
 s, w = os.environ['S_FULL'].encode(), os.environ['W_FULL'].encode()
 with open('Image', 'rb') as f: data = f.read()
-if w in data:
-    if len(s) <= len(w):
-        print('Patching...')
-        padded = s + b'\x00' * (len(w) - len(s))
-        with open('kernel', 'wb') as f: f.write(data.replace(w, padded))
-    else:
-        print('Warning: Stock string too long'); with open('kernel', 'wb') as f: f.write(data)
+if w in data and len(s) <= len(w):
+    with open('kernel', 'wb') as f: f.write(data.replace(w, s + b'\x00' * (len(w) - len(s))))
 else:
     with open('kernel', 'wb') as f: f.write(data)
 "
-          # Repack
           ./magiskboot repack "$FW_DIR/boot.img" patched_boot.img
 
-      - name: Update README
+      - name: Docs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -86,10 +75,10 @@ else:
           Z_NX=$(gh release view --repo Dr-TSNG/ZygiskNext --json tagName --jq .tagName)
           M_OV=$(gh release view --repo KernelSU-Modules-Repo/meta-overlayfs --json tagName --jq .tagName)
           S_MD=$(gh release view --repo sidex15/susfs4ksu-module --json tagName --jq .tagName)
-          sed -i "s|Wild_KSU/releases/tag/[^)]*|Wild_KSU/releases/tag/$W_APP|g" README.md
-          sed -i "s|ZygiskNext/releases/tag/[^)]*|ZygiskNext/releases/tag/$Z_NX|g" README.md
-          sed -i "s|meta-overlayfs/releases/tag/[^)]*|meta-overlayfs/releases/tag/$M_OV|g" README.md
-          sed -i "s|susfs4ksu-module/releases/tag/[^)]*|susfs4ksu-module/releases/tag/$S_MD|g" README.md
+          sed -i "s|releases/tag/latest|releases/tag/$W_APP|g" README.md
+          sed -i "s|releases/tag/latest|releases/tag/$Z_NX|g" README.md
+          sed -i "s|releases/tag/latest|releases/tag/$M_OV|g" README.md
+          sed -i "s|releases/tag/latest|releases/tag/$S_MD|g" README.md
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           if ! git diff --exit-code README.md; then
@@ -101,6 +90,5 @@ else:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          K_VER="${{ steps.build.outputs.kver }}"
-          TAG="build-$K_VER-${{ github.run_number }}"
-          gh release create "$TAG" patched_boot.img --title "Update $TAG" --notes "Patched"
+          K_VER="${{ steps.build.outputs.kver_use }}"
+          gh release create "build-$K_VER-${{ github.run_number }}" patched_boot.img --title "Release $K_VER" --notes "Patched with WildKSU"
