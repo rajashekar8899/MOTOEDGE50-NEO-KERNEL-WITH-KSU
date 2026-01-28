@@ -70,7 +70,12 @@ if ! git diff --exit-code README.md; then
 fi
 
 # 8. Create Release
+# 8. Create Release
 BUILD_ID=$(echo "$STOCK_FULL" | sed 's/Linux version //;s/ (.*//')
 FW_VER=$(basename "$FW_DIR" | sed 's/^firmware_//')
-TAG="build-$(date +%Y%m%d%H%M)"
+TAG="$FW_VER"
+
+# Delete existing release/tag if it exists to allow re-runs
+gh release delete "$TAG" --cleanup-tag --yes || true
+
 gh release create "$TAG" patched_boot.img --title "Build: $FW_VER" --notes "**Firmware**: $FW_VER\n**Kernel**: $BUILD_ID\n**Patched with**: WildKSU ($W_APP)" --latest
