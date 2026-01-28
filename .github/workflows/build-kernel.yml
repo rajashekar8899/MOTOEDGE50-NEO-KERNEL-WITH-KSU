@@ -1,16 +1,18 @@
 name: Patch Kernel with WildKSU
 
 on:
+  schedule:
+    - cron: '0 0 * * 0' # Every Sunday
   push:
     branches: [ master ]
   workflow_dispatch:
     inputs:
       firmware_dir:
-        description: 'Manual override: Directory containing stock ROM files'
+        description: 'Directory containing stock ROM files'
         required: false
         default: ''
       kernel_version:
-        description: 'Manual override: Kernel version (e.g., 6.1.141)'
+        description: 'Kernel version (e.g., 6.1.141)'
         required: false
         default: ''
 
@@ -20,120 +22,94 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           lfs: true
           fetch-depth: 0
 
-      - name: Auto-Detect Firmware Directory
-        id: detect_fw
-        run: |
-          # Use input if provided, else detect
-          INPUT_FW="${{ github.event.inputs.firmware_dir }}"
-          if [ -n "$INPUT_FW" ]; then
-            echo "fw_dir=$INPUT_FW" >> $GITHUB_OUTPUT
-          else
-            FW_DIR=$(ls -d firmware_* | sort -V | tail -n 1)
-            echo "fw_dir=$FW_DIR" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Download magiskboot
+      - name: Setup Tools
         run: |
           wget https://github.com/magojohnji/magiskboot-linux/raw/main/x86_64/magiskboot -O magiskboot
           chmod +x magiskboot
 
-      - name: Unpack Stock Kernel and Detect Version
-        id: detect_kver
+      - name: Detect Firmware and Version
+        id: info
         run: |
-          FW_DIR="${{ steps.detect_fw.outputs.fw_dir }}"
-          BOOT_IMG="${FW_DIR}/boot.img"
-          if [ ! -f "$BOOT_IMG" ]; then
-            echo "Error: $BOOT_IMG not found"
-            exit 1
+          # Detect Firmware Dir
+          if [ -n "${{ github.event.inputs.firmware_dir }}" ]; then
+            FW_DIR="${{ github.event.inputs.firmware_dir }}"
+          else
+            FW_DIR=$(ls -d firmware_* | sort -V | tail -n 1)
           fi
-          ./magiskboot unpack "$BOOT_IMG"
+          echo "fw_dir=$FW_DIR" >> $GITHUB_OUTPUT
+          
+          # Unpack and Detect Kernel Version
+          ./magiskboot unpack "$FW_DIR/boot.img"
           mv kernel kernel.stock
           K_VER=$(strings kernel.stock | grep "Linux version " | awk '{print $3}' | cut -d'-' -f1)
           echo "kver=$K_VER" >> $GITHUB_OUTPUT
+          
+          # Extract Full Stock String
+          STOCK_FULL=$(strings kernel.stock | grep "Linux version " | head -n 1)
+          echo "stock_full=$STOCK_FULL" >> $GITHUB_OUTPUT
 
-      - name: Resolve WildKSU Latest Release
-        id: resolve_wildksu
+      - name: Download WildKSU
+        id: wildksu
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           R_TAG=$(gh release list --repo WildKernels/GKI_KernelSU_SUSFS --limit 1 | awk '{print $3}')
-          echo "tag=$R_TAG" >> $GITHUB_OUTPUT
+          K_VER="${{ github.event.inputs.kernel_version || steps.info.outputs.kver }}"
+          ASSET=$(gh release view "$R_TAG" --repo WildKernels/GKI_KernelSU_SUSFS --json assets --jq ".assets[] | select(.name | contains(\"$K_VER\") and contains(\"Normal\")) | .name" | head -n 1)
+          if [ -z "$ASSET" ]; then echo "No asset for $K_VER"; exit 1; fi
+          gh release download "$R_TAG" --repo WildKernels/GKI_KernelSU_SUSFS --pattern "$ASSET"
+          unzip "$ASSET" Image
+          WILD_FULL=$(strings Image | grep "Linux version " | head -n 1)
+          echo "wild_full=$WILD_FULL" >> $GITHUB_OUTPUT
 
-      - name: Download and Patch Kernel
+      - name: Patch Kernel Binary
         env:
-          GH_TOKEN: ${{ github.token }}
+          STOCK_FULL: ${{ steps.info.outputs.stock_full }}
+          WILD_FULL: ${{ steps.wildksu.outputs.wild_full }}
         run: |
-          K_VER_INPUT="${{ github.event.inputs.kernel_version }}"
-          K_VER="${K_VER_INPUT:-${{ steps.detect_kver.outputs.kver }}}"
-          R_TAG="${{ steps.resolve_wildksu.outputs.tag }}"
-          
-          ASSET_NAME=$(gh release view "$R_TAG" --repo WildKernels/GKI_KernelSU_SUSFS --json assets --jq ".assets[] | select(.name | contains(\"$K_VER\") and contains(\"Normal\")) | .name" | head -n 1)
-          
-          if [ -z "$ASSET_NAME" ]; then
-            echo "Error: Could not find asset for $K_VER"
-            exit 1
-          fi
-          
-          gh release download "$R_TAG" --repo WildKernels/GKI_KernelSU_SUSFS --pattern "$ASSET_NAME"
-          unzip "$ASSET_NAME" Image
-          
-          export STOCK_VERSION=$(strings kernel.stock | grep "Linux version " | head -n 1)
-          export WILD_VERSION=$(strings Image | grep "Linux version " | head -n 1)
-          
           python3 -c "
-import sys, os
+import os, sys
 with open('Image', 'rb') as f: data = f.read()
-o, n = os.environ['WILD_VERSION'].encode(), os.environ['STOCK_VERSION'].encode()
-if o in data:
-    n_padded = n + b'\x00' * (len(o) - len(n))
-    with open('Image.patched', 'wb') as f: f.write(data.replace(o, n_padded))
+s, w = os.environ['STOCK_FULL'].encode(), os.environ['WILD_FULL'].encode()
+if w in data:
+    new_data = data.replace(w, s + b'\x00' * (len(w) - len(s)))
+    with open('kernel', 'wb') as f: f.write(new_data)
+else:
+    with open('kernel', 'wb') as f: f.write(data)
 "
-          if [ -f Image.patched ]; then mv Image.patched kernel; else mv Image kernel; fi
-
-      - name: Repack boot.img
+      - name: Repack
         run: |
-          FW_DIR="${{ steps.detect_fw.outputs.fw_dir }}"
-          BOOT_IMG="${FW_DIR}/boot.img"
-          ./magiskboot repack "$BOOT_IMG" patched_boot.img
+          ./magiskboot repack "${{ steps.info.outputs.fw_dir }}/boot.img" patched_boot.img
 
-      - name: Update README with Latest Modules
+      - name: Update Modules in README
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          
-          # Fetch versions
           W_APP=$(gh release view --repo WildKernels/Wild_KSU --json tagName --jq .tagName)
           Z_NEXT=$(gh release view --repo Dr-TSNG/ZygiskNext --json tagName --jq .tagName)
           M_OVER=$(gh release view --repo KernelSU-Modules-Repo/meta-overlayfs --json tagName --jq .tagName)
           S_MOD=$(gh release view --repo sidex15/susfs4ksu-module --json tagName --jq .tagName)
-          
-          # Use safer sed delimiter and more robust regex
           sed -i "s|Wild_KSU/releases/tag/[^\)]*|Wild_KSU/releases/tag/$W_APP|g" README.md
           sed -i "s|ZygiskNext/releases/tag/[^\)]*|ZygiskNext/releases/tag/$Z_NEXT|g" README.md
           sed -i "s|meta-overlayfs/releases/tag/[^\)]*|meta-overlayfs/releases/tag/$M_OVER|g" README.md
           sed -i "s|susfs4ksu-module/releases/tag/[^\)]*|susfs4ksu-module/releases/tag/$S_MOD|g" README.md
-          
           if ! git diff --exit-code README.md; then
             git add README.md
-            git commit -m "Docs: Auto-update module versions"
-            git push origin master
+            git commit -m "Docs: Update modules" && git push origin master
           fi
 
-      - name: Create Release
+      - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          K_VER="${{ steps.detect_kver.outputs.kver }}"
-          TAG_NAME="build-$K_VER-${{ github.run_number }}"
-          gh release create "$TAG_NAME" patched_boot.img \
-            --title "Moto Edge 50 Neo Build ($K_VER)" \
-            --notes "Patched with WildKSU" \
-            --latest
+          K_VER="${{ steps.info.outputs.kver }}"
+          TAG="build-$K_VER-${{ github.run_number }}"
+          gh release create "$TAG" patched_boot.img --title "Patched Boot $K_VER (#${{ github.run_number }})" --notes "Patched with WildKSU" --latest
