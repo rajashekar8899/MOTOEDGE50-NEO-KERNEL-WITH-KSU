@@ -1,0 +1,67 @@
+name: Patch Kernel with WildKSU
+
+on:
+  workflow_dispatch:
+    inputs:
+      firmware_dir:
+        description: 'Directory containing stock ROM files (e.g., firmware_V1UIS35H)'
+        required: true
+        default: 'firmware_V1UIS35H'
+      kernel_version:
+        description: 'Kernel version to use from WildKernels (e.g., 6.1.141)'
+        required: true
+        default: '6.1.141'
+      release_tag:
+        description: 'WildKernels release tag'
+        required: true
+        default: 'v2.0.0-r8'
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Download magiskboot
+        run: |
+          wget https://github.com/magojohnji/magiskboot-linux/raw/main/x86_64/magiskboot -O magiskboot
+          chmod +x magiskboot
+
+      - name: Download WildKSU Kernel
+        run: |
+          # We search for the "Normal" variant of the specified kernel version
+          # Note: Adjust variants (Bypass/Normal) if needed
+          ASSET_NAME="${{ github.event.inputs.kernel_version }}-android14-2025-07-Normal-AnyKernel3.zip"
+          gh release download ${{ github.event.inputs.release_tag }} --repo WildKernels/GKI_KernelSU_SUSFS --pattern "$ASSET_NAME"
+          unzip "$ASSET_NAME" Image
+          if [ ! -f Image ]; then
+            echo "Error: Image not found in AnyKernel3.zip"
+            exit 1
+          fi
+
+      - name: Patch boot.img
+        run: |
+          BOOT_IMG="${{ github.event.inputs.firmware_dir }}/boot.img"
+          if [ ! -f "$BOOT_IMG" ]; then
+            echo "Error: $BOOT_IMG not found"
+            exit 1
+          fi
+          
+          # Unpack stock boot.img
+          ./magiskboot unpack "$BOOT_IMG"
+          
+          # Replace kernel binary
+          # magiskboot unpack produces a file named 'kernel'
+          mv Image kernel
+          
+          # Repack to new_boot.img
+          ./magiskboot repack "$BOOT_IMG" patched_boot.img
+          
+      - name: Upload Patched boot.img
+        uses: actions/upload-artifact@v4
+        with:
+          name: patched-boot-${{ github.event.inputs.kernel_version }}
+          path: patched_boot.img
