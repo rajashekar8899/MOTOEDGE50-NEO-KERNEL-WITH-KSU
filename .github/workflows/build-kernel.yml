@@ -44,7 +44,7 @@ jobs:
             exit 1
           fi
 
-      - name: Patch boot.img
+      - name: Extract and Match Kernel Version String
         run: |
           BOOT_IMG="${{ github.event.inputs.firmware_dir }}/boot.img"
           if [ ! -f "$BOOT_IMG" ]; then
@@ -52,11 +52,62 @@ jobs:
             exit 1
           fi
           
-          # Unpack stock boot.img
+          # Unpack stock boot.img to get stock kernel
           ./magiskboot unpack "$BOOT_IMG"
+          mv kernel kernel.stock
           
-          # Replace kernel binary
+          # Extract stock version string
+          # Usually starts with 'Linux version '
+          STOCK_VERSION=$(strings kernel.stock | grep "Linux version " | head -n 1)
+          echo "Stock Kernel Version: $STOCK_VERSION"
+          
+          # Unpack WildKSU AnyKernel3.zip was already done in previous step (Image file)
+          # We need to extract its version string too
+          WILD_VERSION=$(strings Image | grep "Linux version " | head -n 1)
+          echo "WildKSU Kernel Version: $WILD_VERSION"
+          
+          if [ "$STOCK_VERSION" != "$WILD_VERSION" ]; then
+            echo "Versions differ! Attempting to patch WildKSU kernel string..."
+            
+            # Simple python script to patch the string in binary
+            # This is safe ONLY if the new string is shorter or equal to the old one.
+            # We'll pad with null bytes if shorter.
+            python3 -c "
+import sys
+with open('Image', 'rb') as f:
+    data = f.read()
+
+old_str = b'${WILD_VERSION}'
+new_str = b'${STOCK_VERSION}'
+
+if old_str in data:
+    if len(new_str) > len(old_str):
+        print('Error: Stock version string is longer than WildKSU string. Cannot patch without shifting offsets.')
+        sys.exit(0) # Continue anyway but notify
+    
+    # Pad new string with null bytes to match old length
+    new_str_padded = new_str + b'\x00' * (len(old_str) - len(new_str))
+    new_data = data.replace(old_str, new_str_padded)
+    
+    with open('Image.patched', 'wb') as f:
+        f.write(new_data)
+    print('Kernel patched successfully.')
+else:
+    print('Error: Could not find WildKSU version string in binary.')
+"
+            if [ -f Image.patched ]; then
+              mv Image.patched Image
+            fi
+          else
+            echo "Versions already match."
+          fi
+
+      - name: Patch boot.img
+        run: |
+          BOOT_IMG="${{ github.event.inputs.firmware_dir }}/boot.img"
+          
           # magiskboot unpack produces a file named 'kernel'
+          # We already have kernel.stock from previous step, but magiskboot needs 'kernel' file
           mv Image kernel
           
           # Repack to new_boot.img
