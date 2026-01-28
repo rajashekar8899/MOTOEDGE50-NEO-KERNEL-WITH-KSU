@@ -31,6 +31,8 @@ jobs:
           chmod +x magiskboot
 
       - name: Download WildKSU Kernel
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           # We search for the "Normal" variant of the specified kernel version
           # Note: Adjust variants (Bypass/Normal) if needed
