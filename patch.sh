@@ -33,19 +33,91 @@ gh release download "$R_TAG" --repo WildKernels/GKI_KernelSU_SUSFS --pattern "$A
 unzip "$ASSET" Image
 WILD_FULL=$(strings Image | grep "Linux version " | head -n 1)
 
-# 5. Patch Binary
+# 5. Extract Stock Metadata
+STOCK_SHA256=$(sha256sum "$FW_DIR/boot.img" | awk '{print $1}')
+echo "Stock boot.img SHA256: $STOCK_SHA256"
+
+# Extract info from .info.txt file if it exists
+INFO_FILE=$(find "$FW_DIR" -name "*.info.txt" -type f | head -n 1)
+SW_VERSION=""
+BUILD_FINGERPRINT=""
+SW_DISPLAY_BUILD=""
+MODEM_VERSION=""
+
+if [ -n "$INFO_FILE" ]; then
+    echo "Found info file: $INFO_FILE"
+    SW_VERSION=$(grep "SW Version:" "$INFO_FILE" | sed 's/.*SW Version: //')
+    BUILD_FINGERPRINT=$(grep "Build Fingerprint:" "$INFO_FILE" | sed 's/.*Build Fingerprint: //')
+    SW_DISPLAY_BUILD=$(grep "SW Display Build ID:" "$INFO_FILE" | sed 's/.*SW Display Build ID: //')
+    MODEM_VERSION=$(grep "Modem Version:" "$INFO_FILE" | sed 's/.*Modem Version: //')
+fi
+
+# 6. Patch Binary - Replace ALL WildKSU strings
 export STOCK_FULL="$STOCK_FULL"
 export WILD_FULL="$WILD_FULL"
-python3 -c "
+python3 << 'PYTHON_SCRIPT'
 import os
-with open('Image', 'rb') as f: data = f.read()
-s = os.environ['STOCK_FULL'].encode()
-w = os.environ['WILD_FULL'].encode()
-if w in data and len(s) <= len(w):
-    with open('kernel', 'wb') as f: f.write(data.replace(w, s + b'\x00' * (len(w) - len(s))))
-else:
-    with open('kernel', 'wb') as f: f.write(data)
-"
+import sys
+
+# Read the WildKSU kernel
+with open('Image', 'rb') as f:
+    data = bytearray(f.read())
+
+stock_str = os.environ['STOCK_FULL'].encode()
+wild_str = os.environ['WILD_FULL'].encode()
+
+print(f"Stock version: {stock_str.decode('utf-8', errors='ignore')}")
+print(f"Wild version: {wild_str.decode('utf-8', errors='ignore')}")
+
+# Check if we can replace
+if len(stock_str) > len(wild_str):
+    print(f"ERROR: Stock string ({len(stock_str)} bytes) is longer than Wild string ({len(wild_str)} bytes)")
+    print("Cannot safely replace without potentially corrupting the kernel")
+    sys.exit(1)
+
+# Replace ALL occurrences of the Wild version string with Stock version
+replacements = 0
+pos = 0
+while True:
+    pos = data.find(wild_str, pos)
+    if pos == -1:
+        break
+    # Replace with stock string and pad with null bytes
+    replacement = stock_str + b'\x00' * (len(wild_str) - len(stock_str))
+    data[pos:pos+len(wild_str)] = replacement
+    replacements += 1
+    pos += len(wild_str)
+
+print(f"Replaced {replacements} occurrence(s) of Wild version string")
+
+# Also replace common WildKSU/WildKernels identifiers
+wild_identifiers = [
+    b'WildKernels',
+    b'WildKSU',
+    b'wild-ksu',
+    b'wildksu'
+]
+
+for identifier in wild_identifiers:
+    count = 0
+    pos = 0
+    while True:
+        pos = data.find(identifier, pos)
+        if pos == -1:
+            break
+        # Replace with spaces/nulls to hide the identifier
+        data[pos:pos+len(identifier)] = b'\x00' * len(identifier)
+        count += 1
+        pos += len(identifier)
+    if count > 0:
+        print(f"Nullified {count} occurrence(s) of '{identifier.decode('utf-8', errors='ignore')}'")
+
+# Write the patched kernel
+with open('kernel', 'wb') as f:
+    f.write(data)
+
+print("Kernel patching completed successfully")
+PYTHON_SCRIPT
 
 # 6. Repack
 ./magiskboot repack "$FW_DIR/boot.img" patched_boot.img
@@ -117,4 +189,56 @@ TAG="$FW_VER"
 # Delete existing release/tag if it exists to allow re-runs
 gh release delete "$TAG" --cleanup-tag --yes || true
 
-gh release create "$TAG" patched_boot.img --title "Build: $FW_VER" --notes "**Firmware**: $FW_VER\n**Kernel**: $BUILD_ID\n**Patched with**: WildKSU ($W_APP)" --latest
+# Build comprehensive release notes
+RELEASE_NOTES="## Stock Firmware Information
+
+**Firmware Version**: \`$FW_VER\`
+**Stock boot.img SHA256**: \`$STOCK_SHA256\`
+**Stock Kernel Version**: \`$BUILD_ID\`"
+
+# Add additional metadata if available
+if [ -n "$SW_VERSION" ]; then
+    RELEASE_NOTES="$RELEASE_NOTES
+**SW Version**: \`$SW_VERSION\`"
+fi
+
+if [ -n "$BUILD_FINGERPRINT" ]; then
+    RELEASE_NOTES="$RELEASE_NOTES
+**Build Fingerprint**: \`$BUILD_FINGERPRINT\`"
+fi
+
+if [ -n "$MODEM_VERSION" ]; then
+    RELEASE_NOTES="$RELEASE_NOTES
+**Modem Version**: \`$MODEM_VERSION\`"
+fi
+
+RELEASE_NOTES="$RELEASE_NOTES
+
+## Patching Information
+
+**Patched with**: WildKSU (\`$W_APP\`) + SUSFS
+**WildKSU GKI Asset**: \`$ASSET\`
+
+## Verification
+
+All WildKSU/WildKernels identifying strings have been replaced with stock equivalents.
+The patched boot image will appear as stock in system settings while maintaining KSU functionality.
+
+## Required Modules
+
+- [Wild KSU Manager](https://github.com/WildKernels/Wild_KSU/releases/tag/$W_APP)
+- [ZygiskNext](https://github.com/Dr-TSNG/ZygiskNext/releases/tag/$Z_NX)
+- [Meta Overlayfs](https://github.com/KernelSU-Modules-Repo/meta-overlayfs/releases/tag/$M_OV)
+- [SUSFS4KSU Module](https://github.com/sidex15/susfs4ksu-module/releases/tag/$S_MD)
+
+## Installation
+
+\`\`\`bash
+fastboot flash boot patched_boot.img
+fastboot reboot
+\`\`\`
+
+> [!WARNING]
+> Ensure this matches your device's firmware version (\`$FW_VER\`) before flashing!"
+
+gh release create "$TAG" patched_boot.img --title "Build: $FW_VER" --notes "$RELEASE_NOTES" --latest
